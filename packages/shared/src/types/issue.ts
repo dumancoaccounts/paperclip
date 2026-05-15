@@ -108,6 +108,191 @@ export interface IssueProgressSummary {
   source: IssueProgressSource;
 }
 
+export type ParentDeliverySummaryState = "fresh" | "stale" | "superseded" | "partial";
+export type ParentDeliverySummaryConfidence = "high" | "medium" | "low";
+
+export interface ParentDeliverySummarySourceRevision {
+  issueUpdatedAt: string;
+  commentCursor?: string | null;
+  evidenceCursor?: string | null;
+  runCursor?: string | null;
+}
+
+export interface ParentDeliverySummaryCounts {
+  totalChildren: number;
+  done: number;
+  active: number;
+  blocked: number;
+  review: number;
+  todo: number;
+  cancelled: number;
+  missingContract: number;
+  missingEvidence: number;
+}
+
+export interface ParentDeliveryEstimateSnapshot {
+  size: IssueEstimate["size"] | null;
+  expectedHeartbeatCount: number | null;
+  expectedHeartbeatRange: { min: number; max: number } | null;
+  risk: IssueEstimate["risk"] | null;
+  effectiveParallelism: number | null;
+  remainingHeartbeats: number;
+  confidence: ParentDeliverySummaryConfidence;
+  source: "count" | "range" | "size" | "default" | "review_tail" | "done";
+}
+
+export interface ParentDeliveryEvidenceSnapshot {
+  closeConfidence: IssueDeliveryEvidenceSummary["closeConfidence"];
+  primaryEvidenceId: string | null;
+  currentEvidenceCount: number;
+  staleEvidenceCount: number;
+  supersededEvidenceCount: number;
+  missingReasons: string[];
+  lastVerifiedAt: string | null;
+}
+
+export interface ParentDeliveryItem {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  status: IssueStatus;
+  phase?: IssuePhase | null;
+  assigneeLabel?: string | null;
+  expectedOutput?: string | null;
+  successCriteriaStatus: "present" | "missing" | "partial";
+  minimumVerificationStatus: "present" | "missing" | "satisfied" | "stale";
+  estimate?: ParentDeliveryEstimateSnapshot | null;
+  evidence?: ParentDeliveryEvidenceSnapshot | null;
+  blockers: string[];
+  isOnCriticalPath: boolean;
+}
+
+export interface ParentDeliveryBlockerSummary {
+  blockerIssueId: string;
+  identifier: string | null;
+  title: string;
+  status: IssueStatus;
+  blocksChildren: string[];
+  ownerLabel?: string | null;
+  ageBlocked?: string | null;
+  actionNeeded: "wait_dependency" | "triage_cancelled_blocker" | "assign_owner" | "needs_decision";
+}
+
+export interface ParentDeliveryCriticalPathStep {
+  issueId: string;
+  identifier: string | null;
+  reason: string;
+  remainingCost: number;
+}
+
+export interface ParentDeliveryCriticalPathSummary {
+  state: "available" | "no_open_work" | "insufficient_estimates" | "invalid_graph";
+  estimatedRemainingHeartbeats?: number;
+  path: ParentDeliveryCriticalPathStep[];
+  confidence: ParentDeliverySummaryConfidence;
+}
+
+export interface ParentDeliveryProgressSummary {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  at: string;
+  source: "work_product_evidence" | "status_transition" | "active_run" | "continuation_summary" | "agent_comment";
+  summary: string;
+}
+
+export interface ParentDeliveryEffectiveAgentCapBranch {
+  label: string;
+  issueIds: string[];
+  ready: boolean;
+}
+
+export interface ParentDeliveryEffectiveAgentCapSummary {
+  recommendedCap: number;
+  currentActiveAgents: number;
+  addableAgents: number;
+  limitingFactors: Array<
+    | "blocked_dependencies"
+    | "insufficient_granularity"
+    | "ownership_conflict_unknown"
+    | "missing_contract"
+    | "critical_path_serial"
+  >;
+  independentBranches: ParentDeliveryEffectiveAgentCapBranch[];
+  confidence: ParentDeliverySummaryConfidence;
+}
+
+export interface ParentDeliveryRisk {
+  kind:
+    | "missing_contract"
+    | "missing_evidence"
+    | "stale_evidence"
+    | "superseded_evidence"
+    | "cancelled_blocker"
+    | "missing_estimate"
+    | "invalid_dependency_graph"
+    | "permission_filtered_children"
+    | "no_children";
+  severity: "high" | "medium" | "low";
+  issueId?: string | null;
+  identifier?: string | null;
+  message: string;
+}
+
+export interface ParentDeliveryNextAction {
+  kind:
+    | "unblock_dependency"
+    | "add_contract"
+    | "add_evidence"
+    | "refresh_evidence"
+    | "assign_ready_child"
+    | "triage_cancelled_blocker"
+    | "split_work"
+    | "no_action";
+  issueId?: string | null;
+  identifier?: string | null;
+  message: string;
+}
+
+export interface ParentDeliverySummary {
+  parentIssueId: string;
+  generatedAt: string;
+  sourceRevision: ParentDeliverySummarySourceRevision;
+  state: ParentDeliverySummaryState;
+  counts: ParentDeliverySummaryCounts;
+  completed: ParentDeliveryItem[];
+  remaining: ParentDeliveryItem[];
+  blockers: ParentDeliveryBlockerSummary[];
+  criticalPath: ParentDeliveryCriticalPathSummary;
+  lastMeaningfulProgress: ParentDeliveryProgressSummary | null;
+  effectiveAgentCap: ParentDeliveryEffectiveAgentCapSummary;
+  risks: ParentDeliveryRisk[];
+  nextActions: ParentDeliveryNextAction[];
+  confidence: ParentDeliverySummaryConfidence;
+}
+
+export interface ParentDeliverySummaryCompact {
+  parentIssueId: string;
+  generatedAt: string;
+  state: ParentDeliverySummaryState;
+  counts: ParentDeliverySummaryCounts;
+  blockerCount: number;
+  criticalPath: {
+    state: ParentDeliveryCriticalPathSummary["state"];
+    estimatedRemainingHeartbeats?: number;
+    identifiers: Array<string | null>;
+    confidence: ParentDeliverySummaryConfidence;
+  };
+  lastMeaningfulProgress: ParentDeliveryProgressSummary | null;
+  effectiveAgentCap: Pick<
+    ParentDeliveryEffectiveAgentCapSummary,
+    "recommendedCap" | "currentActiveAgents" | "addableAgents" | "limitingFactors" | "confidence"
+  >;
+  riskCount: number;
+  nextActions: ParentDeliveryNextAction[];
+  confidence: ParentDeliverySummaryConfidence;
+}
+
 export type DocumentFormat = "markdown";
 
 export interface IssueDocumentSummary {

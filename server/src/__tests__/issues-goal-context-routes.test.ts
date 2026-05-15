@@ -90,6 +90,71 @@ const mockWorkProductService = vi.hoisted(() => ({
   listForIssue: vi.fn(async () => []),
 }));
 
+const mockParentDeliverySummaryService = vi.hoisted(() => ({
+  getSummary: vi.fn(async () => ({
+    parentIssueId: "11111111-1111-4111-8111-111111111111",
+    generatedAt: "2026-03-24T12:15:00.000Z",
+    sourceRevision: { issueUpdatedAt: "2026-03-24T12:00:00.000Z" },
+    state: "fresh",
+    counts: {
+      totalChildren: 0,
+      done: 0,
+      active: 0,
+      blocked: 0,
+      review: 0,
+      todo: 0,
+      cancelled: 0,
+      missingContract: 0,
+      missingEvidence: 0,
+    },
+    completed: [],
+    remaining: [],
+    blockers: [],
+    criticalPath: { state: "no_open_work", path: [], confidence: "high" },
+    lastMeaningfulProgress: null,
+    effectiveAgentCap: {
+      recommendedCap: 0,
+      currentActiveAgents: 0,
+      addableAgents: 0,
+      limitingFactors: [],
+      independentBranches: [],
+      confidence: "high",
+    },
+    risks: [],
+    nextActions: [{ kind: "no_action", message: "No immediate parent delivery action is required." }],
+    confidence: "high",
+  })),
+  getCompactSummary: vi.fn(async () => ({
+    parentIssueId: "11111111-1111-4111-8111-111111111111",
+    generatedAt: "2026-03-24T12:15:00.000Z",
+    state: "fresh",
+    counts: {
+      totalChildren: 0,
+      done: 0,
+      active: 0,
+      blocked: 0,
+      review: 0,
+      todo: 0,
+      cancelled: 0,
+      missingContract: 0,
+      missingEvidence: 0,
+    },
+    blockerCount: 0,
+    criticalPath: { state: "no_open_work", identifiers: [], confidence: "high" },
+    lastMeaningfulProgress: null,
+    effectiveAgentCap: {
+      recommendedCap: 0,
+      currentActiveAgents: 0,
+      addableAgents: 0,
+      limitingFactors: [],
+      confidence: "high",
+    },
+    riskCount: 0,
+    nextActions: [{ kind: "no_action", message: "No immediate parent delivery action is required." }],
+    confidence: "high",
+  })),
+}));
+
 const mockEnvironmentService = vi.hoisted(() => ({}));
 
 const mockDb = vi.hoisted(() => ({
@@ -117,6 +182,7 @@ vi.mock("../services/index.js", () => ({
   }),
   issueReferenceService: () => mockIssueReferenceService,
   issueService: () => mockIssueService,
+  parentDeliverySummaryService: () => mockParentDeliverySummaryService,
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
   routineService: () => mockRoutineService,
@@ -255,6 +321,8 @@ describe.sequential("issue goal context routes", () => {
     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
     mockIssueService.listAttachments.mockResolvedValue([]);
     mockWorkProductService.listForIssue.mockResolvedValue([]);
+    mockParentDeliverySummaryService.getSummary.mockClear();
+    mockParentDeliverySummaryService.getCompactSummary.mockClear();
     mockDocumentsService.getIssueDocumentPayload.mockResolvedValue({});
     mockDocumentsService.getIssueDocumentByKey.mockResolvedValue(null);
     mockExecutionWorkspaceService.getById.mockResolvedValue(null);
@@ -309,7 +377,7 @@ describe.sequential("issue goal context routes", () => {
   it("surfaces the project goal from GET /issues/:id when the issue has no direct goal", async () => {
     const res = await request(createApp()).get("/api/issues/11111111-1111-4111-8111-111111111111");
 
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.goalId).toBe(projectGoal.id);
     expect(res.body.goal).toEqual(
       expect.objectContaining({
@@ -329,7 +397,7 @@ describe.sequential("issue goal context routes", () => {
       "/api/issues/11111111-1111-4111-8111-111111111111/heartbeat-context",
     );
 
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.issue.goalId).toBe(projectGoal.id);
     expect(res.body.issue.workMode).toBe("planning");
     expect(res.body.goal).toEqual(
@@ -414,6 +482,41 @@ describe.sequential("issue goal context routes", () => {
       currentEvidenceCount: 1,
     }));
     expect(heartbeatRes.body.deliveryEvidence).toEqual(heartbeatRes.body.issue.deliveryEvidence);
+  });
+
+  it("surfaces compact parent delivery summary in heartbeat context", async () => {
+    const res = await request(createApp()).get(
+      "/api/issues/11111111-1111-4111-8111-111111111111/heartbeat-context",
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockParentDeliverySummaryService.getCompactSummary).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      { depth: 1 },
+    );
+    expect(res.body.issue.parentDeliverySummary).toEqual(expect.objectContaining({
+      parentIssueId: "11111111-1111-4111-8111-111111111111",
+      criticalPath: expect.objectContaining({ state: "no_open_work" }),
+    }));
+    expect(res.body.parentDeliverySummary).toEqual(res.body.issue.parentDeliverySummary);
+  });
+
+  it("returns the full parent delivery summary endpoint", async () => {
+    const res = await request(createApp()).get(
+      "/api/issues/11111111-1111-4111-8111-111111111111/parent-delivery-summary?depth=1",
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockParentDeliverySummaryService.getSummary).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      { depth: 1 },
+    );
+    expect(res.body).toEqual(expect.objectContaining({
+      parentIssueId: "11111111-1111-4111-8111-111111111111",
+      counts: expect.objectContaining({ totalChildren: 0 }),
+      completed: [],
+      remaining: [],
+    }));
   });
 
   it("preserves direct continuation summary lookup in GET /issues/:id/heartbeat-context", async () => {

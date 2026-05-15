@@ -70,6 +70,7 @@ import {
   ISSUE_LIST_MAX_LIMIT,
   issueReferenceService,
   issueService,
+  parentDeliverySummaryService,
   clampIssueListLimit,
   documentService,
   logActivity,
@@ -269,6 +270,15 @@ function labelIssueWorkspaceMode(mode: string | null) {
     default:
       return "No workspace";
   }
+}
+
+function parseParentDeliverySummaryDepth(rawDepth: unknown) {
+  if (rawDepth === undefined) return 1;
+  const value = typeof rawDepth === "string" ? rawDepth : String(rawDepth);
+  if (value !== "1") {
+    throw unprocessable("parent delivery summary currently supports depth=1");
+  }
+  return 1;
 }
 
 type IssueWorkspaceAuditInput = {
@@ -886,6 +896,7 @@ export function issueRoutes(
   const recoveryActionsSvc = issueRecoveryActionService(db);
   const executionWorkspacesSvc = executionWorkspaceServiceDirect(db);
   const workProductsSvc = workProductService(db);
+  const parentDeliverySummariesSvc = parentDeliverySummaryService(db);
   const documentsSvc = documentService(db);
   const issueReferencesSvc = issueReferenceService(db);
   const routinesSvc = routineService(db, {
@@ -1553,14 +1564,23 @@ export function issueRoutes(
       offset,
     });
     const issueIds = result.map((issue) => issue.id);
+    const includeParentDeliverySummary =
+      req.query.includeParentDeliverySummary === "true" || req.query.includeParentDeliverySummary === "1";
     const [handoffStates, recoveryActionByIssue] = await Promise.all([
       listSuccessfulRunHandoffStates(db, companyId, issueIds),
       recoveryActionsSvc.listActiveForIssues(companyId, issueIds),
     ]);
+    const parentDeliverySummaries = new Map<string, Awaited<ReturnType<typeof parentDeliverySummariesSvc.getCompactSummary>>>();
+    if (includeParentDeliverySummary) {
+      await Promise.all(result.map(async (issue) => {
+        parentDeliverySummaries.set(issue.id, await parentDeliverySummariesSvc.getCompactSummary(issue.id, { depth: 1 }));
+      }));
+    }
     res.json(result.map((issue) => ({
       ...issue,
       successfulRunHandoff: handoffStates.get(issue.id) ?? null,
       activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
+      ...(includeParentDeliverySummary ? { parentDeliverySummary: parentDeliverySummaries.get(issue.id) ?? null } : {}),
     })));
   });
 
@@ -1690,6 +1710,7 @@ export function issueRoutes(
       currentExecutionWorkspace,
       activeRecoveryAction,
       workProducts,
+      parentDeliverySummary,
     ] =
       await Promise.all([
         resolveIssueProjectAndGoal(issue),
@@ -1705,6 +1726,7 @@ export function issueRoutes(
         currentExecutionWorkspacePromise,
         recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id),
         workProductsSvc.listForIssue(issue.id),
+        parentDeliverySummariesSvc.getCompactSummary(issue.id, { depth: 1 }),
       ]);
     const recoveryActionsByRelationIssue = await relationRecoveryActionMap(
       recoveryActionsSvc,
@@ -1731,6 +1753,7 @@ export function issueRoutes(
         phase: issue.phase,
         progress: deriveIssueProgressSummary(issue),
         deliveryEvidence,
+        parentDeliverySummary,
         status: issue.status,
         workMode: issue.workMode,
         ...(blockerAttention ? { blockerAttention } : {}),
@@ -1798,7 +1821,21 @@ export function issueRoutes(
         : null,
       currentExecutionWorkspace,
       deliveryEvidence,
+      parentDeliverySummary,
     });
+  });
+
+  router.get("/issues/:id/parent-delivery-summary", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const depth = parseParentDeliverySummaryDepth(req.query.depth);
+    const summary = await parentDeliverySummariesSvc.getSummary(issue.id, { depth });
+    res.json(summary);
   });
 
   router.get("/issues/:id", async (req, res) => {
