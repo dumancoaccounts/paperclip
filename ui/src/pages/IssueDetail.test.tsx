@@ -15,6 +15,9 @@ const mockIssuesApi = vi.hoisted(() => ({
   listFeedbackVotes: vi.fn(),
   markRead: vi.fn(),
   update: vi.fn(),
+  listWorkProducts: vi.fn(),
+  createWorkProduct: vi.fn(),
+  updateWorkProduct: vi.fn(),
   previewTreeControl: vi.fn(),
   getTreeControlState: vi.fn(),
   listTreeHolds: vi.fn(),
@@ -270,8 +273,18 @@ vi.mock("../components/ScrollToBottom", () => ({
 }));
 
 vi.mock("../components/StatusIcon", () => ({
-  StatusIcon: ({ status, blockerAttention }: { status: string; blockerAttention?: Issue["blockerAttention"] }) => (
-    <span data-status-icon-state={blockerAttention?.state}>{status}</span>
+  StatusIcon: ({
+    status,
+    blockerAttention,
+    onChange,
+  }: {
+    status: string;
+    blockerAttention?: Issue["blockerAttention"];
+    onChange?: (status: string) => void;
+  }) => (
+    <button type="button" data-status-icon-state={blockerAttention?.state} onClick={() => onChange?.("done")}>
+      {status}
+    </button>
   ),
 }));
 
@@ -777,6 +790,14 @@ async function waitForAssertion(assertion: () => void, attempts = 20) {
   throw lastError;
 }
 
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  act(() => {
+    setter?.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 describe("IssueDetail", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -799,8 +820,12 @@ describe("IssueDetail", () => {
     mockIssuesApi.list.mockResolvedValue([]);
     mockIssuesApi.listComments.mockResolvedValue([]);
     mockIssuesApi.listAttachments.mockResolvedValue([]);
+    mockIssuesApi.listWorkProducts.mockResolvedValue([]);
+    mockIssuesApi.createWorkProduct.mockResolvedValue({});
+    mockIssuesApi.updateWorkProduct.mockResolvedValue({});
     mockIssuesApi.listFeedbackVotes.mockResolvedValue([]);
     mockIssuesApi.markRead.mockResolvedValue({ id: "issue-1", lastReadAt: new Date().toISOString() });
+    mockIssuesApi.update.mockResolvedValue(createIssue());
     mockIssuesApi.getTreeControlState.mockResolvedValue({ activePauseHold: null });
     mockIssuesApi.listTreeHolds.mockResolvedValue([]);
     mockActivityApi.forIssue.mockResolvedValue([]);
@@ -898,6 +923,57 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Backend schema");
     expect(container.textContent).toContain("Verification");
     expect(container.textContent).toContain("Medium risk");
+  });
+
+  it("warns before closing an issue when delivery evidence is not ready and allows an override reason", async () => {
+    const issue = createIssue({
+      status: "todo",
+      expectedOutput: "Screenshot evidence",
+      minimumVerification: ["Manual QA"],
+      deliveryEvidence: {
+        closeConfidence: "missing",
+        primaryEvidenceId: null,
+        minimumVerificationEvidenceId: null,
+        expectedOutputEvidenceId: null,
+        currentEvidenceCount: 0,
+        staleEvidenceCount: 0,
+        supersededEvidenceCount: 0,
+        missingReasons: ["current_evidence_missing"],
+        lastVerifiedAt: null,
+      },
+    });
+    mockIssuesApi.get.mockResolvedValue(issue);
+    mockIssuesApi.update.mockResolvedValue({ ...issue, status: "done" });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    const statusButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "todo") as HTMLButtonElement;
+    await act(async () => {
+      statusButton.click();
+    });
+
+    expect(container.textContent).toContain("Evidence warning");
+    const reason = container.querySelector("textarea") as HTMLTextAreaElement;
+    setTextareaValue(reason, "Legacy issue already verified in the thread.");
+    const closeAnyway = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Close anyway")) as HTMLButtonElement;
+    await act(async () => {
+      closeAnyway.click();
+    });
+
+    expect(mockIssuesApi.update).toHaveBeenCalledWith("PAP-1", {
+      status: "done",
+      comment: "Closed with evidence override: Legacy issue already verified in the thread.",
+    });
   });
 
   it("renders sibling previous and next navigation at the chat footer", async () => {

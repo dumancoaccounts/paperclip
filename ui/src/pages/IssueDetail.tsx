@@ -75,6 +75,11 @@ import { IssueMonitorActivityCard } from "../components/IssueMonitorActivityCard
 import { IssueScheduledRetryCard } from "../components/IssueScheduledRetryCard";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueContractPanel } from "../components/IssueContractPanel";
+import {
+  IssueDeliveryEvidencePanel,
+  isIssueEvidenceCloseWarningNeeded,
+  issueEvidenceConfidenceLabel,
+} from "../components/IssueDeliveryEvidencePanel";
 import { IssueRunLedger } from "../components/IssueRunLedger";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
@@ -113,12 +118,14 @@ import {
   successfulRunHandoffActivityTone,
 } from "../lib/successful-run-handoff";
 import { hasAssignedBacklogBlocker } from "../lib/issue-blockers";
+import { useLocale } from "../lib/i18n";
 import {
   Activity as ActivityIcon,
   AlertTriangle,
   Archive,
   ArrowLeft,
   Check,
+  ClipboardCheck,
   ChevronRight,
   Copy,
   Eye,
@@ -151,6 +158,7 @@ import {
   type IssueAttachment,
   type IssueComment,
   type IssueWorkMode,
+  type IssueWorkProduct,
   type IssueThreadInteraction,
   type RequestConfirmationInteraction,
   type SuggestTasksInteraction,
@@ -1231,6 +1239,7 @@ export function IssueDetail() {
   const navigationType = useNavigationType();
   const location = useLocation();
   const { pushToast } = useToastActions();
+  const { t } = useLocale();
   const { isMobile } = useSidebar();
   const [moreOpen, setMoreOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1251,6 +1260,8 @@ export function IssueDetail() {
   const [treeControlReason, setTreeControlReason] = useState("");
   const [treeControlWakeAgentsOnResume, setTreeControlWakeAgentsOnResume] = useState(false);
   const [treeControlCancelConfirmed, setTreeControlCancelConfirmed] = useState(false);
+  const [closeWarningOpen, setCloseWarningOpen] = useState(false);
+  const [closeWarningReason, setCloseWarningReason] = useState("");
   const [optimisticComments, setOptimisticComments] = useState<OptimisticIssueComment[]>([]);
   const [locallyQueuedCommentRunIds, setLocallyQueuedCommentRunIds] = useState<Map<string, string>>(() => new Map());
   const [pendingCommentComposerFocusKey, setPendingCommentComposerFocusKey] = useState(0);
@@ -1333,6 +1344,18 @@ export function IssueDetail() {
     queryFn: () => issuesApi.listAttachments(issueId!),
     enabled: !!issueId,
     placeholderData: keepPreviousDataForSameQueryTail<IssueAttachment[]>(issueId ?? "pending"),
+  });
+
+  const {
+    data: workProducts,
+    isLoading: workProductsLoading,
+    error: workProductsError,
+    refetch: refetchWorkProducts,
+  } = useQuery({
+    queryKey: queryKeys.issues.workProducts(issueId!),
+    queryFn: () => issuesApi.listWorkProducts(issueId!),
+    enabled: !!issueId,
+    placeholderData: keepPreviousDataForSameQueryTail<IssueWorkProduct[]>(issueId ?? "pending"),
   });
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
@@ -1634,6 +1657,12 @@ export function IssueDetail() {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(ref) });
     }
   }, [issueCacheRefs, queryClient]);
+  const invalidateIssueWorkProducts = useCallback(() => {
+    for (const ref of issueCacheRefs) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.workProducts(ref) });
+    }
+    invalidateIssueDetail();
+  }, [invalidateIssueDetail, issueCacheRefs, queryClient]);
 
   const removeCommentFromCache = useCallback((commentId: string) => {
     queryClient.setQueryData<InfiniteData<IssueComment[], string | null> | undefined>(
@@ -1918,6 +1947,59 @@ export function IssueDetail() {
   const handleIssuePropertiesUpdate = useCallback((data: Record<string, unknown>) => {
     updateIssue.mutate(data);
   }, [updateIssue.mutate]);
+
+  const createWorkProduct = useMutation({
+    mutationFn: (data: Record<string, unknown>) => issuesApi.createWorkProduct(issueId!, data),
+    onSuccess: () => {
+      invalidateIssueWorkProducts();
+      invalidateIssueCollections();
+      pushToast({ title: t("issueEvidence.addEvidence"), tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: t("issueEvidence.saveFailed"),
+        body: err instanceof Error ? err.message : "Unable to save evidence",
+        tone: "error",
+      });
+    },
+  });
+
+  const updateWorkProduct = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.updateWorkProduct(id, data),
+    onSuccess: () => {
+      invalidateIssueWorkProducts();
+      invalidateIssueCollections();
+      pushToast({ title: t("issueEvidence.saveEvidence"), tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: t("issueEvidence.saveFailed"),
+        body: err instanceof Error ? err.message : "Unable to save evidence",
+        tone: "error",
+      });
+    },
+  });
+
+  const handleIssueStatusChange = useCallback((status: string) => {
+    if (status === "done" && issue && isIssueEvidenceCloseWarningNeeded(issue)) {
+      setCloseWarningReason("");
+      setCloseWarningOpen(true);
+      return;
+    }
+    updateIssue.mutate({ status });
+  }, [issue, updateIssue]);
+
+  const confirmCloseWithEvidenceOverride = useCallback(() => {
+    const reason = closeWarningReason.trim();
+    updateIssue.mutate({
+      status: "done",
+      ...(reason
+        ? { comment: `Closed with evidence override: ${reason}` }
+        : {}),
+    });
+    setCloseWarningOpen(false);
+    setCloseWarningReason("");
+  }, [closeWarningReason, updateIssue]);
 
   const updateChildIssue = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => issuesApi.update(id, data),
@@ -2808,6 +2890,7 @@ export function IssueDetail() {
 
   const isImageAttachment = (attachment: IssueAttachment) => attachment.contentType.startsWith("image/");
   const attachmentList = attachments ?? [];
+  const resolvedWorkProducts = workProducts ?? issue?.workProducts ?? [];
   const imageAttachments = attachmentList.filter(isImageAttachment);
   const nonImageAttachments = attachmentList.filter((a) => !isImageAttachment(a));
 
@@ -3328,7 +3411,7 @@ export function IssueDetail() {
           <StatusIcon
             status={issue.status}
             blockerAttention={issue.blockerAttention}
-            onChange={(status) => updateIssue.mutate({ status })}
+            onChange={handleIssueStatusChange}
           />
           <PriorityIcon
             priority={issue.priority}
@@ -3358,6 +3441,16 @@ export function IssueDetail() {
 
           {issue.productivityReview ? (
             <ProductivityReviewBadge review={issue.productivityReview} />
+          ) : null}
+
+          {issue.deliveryEvidence ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0"
+              title={t("issueEvidence.title")}
+            >
+              <ClipboardCheck className="h-3 w-3" />
+              {issueEvidenceConfidenceLabel(issue.deliveryEvidence.closeConfidence, t)}
+            </span>
           ) : null}
 
           {issue.originKind === "issue_productivity_review" ? (
@@ -3634,6 +3727,19 @@ export function IssueDetail() {
       <IssueContractPanel
         issue={issue}
         onUpdate={(data) => updateIssue.mutateAsync(data)}
+      />
+
+      <IssueDeliveryEvidencePanel
+        issue={issue}
+        workProducts={resolvedWorkProducts}
+        workProductsLoading={workProductsLoading && workProducts === undefined}
+        workProductsError={workProductsError}
+        onRetryWorkProducts={() => {
+          void refetchWorkProducts();
+        }}
+        onCreateWorkProduct={(data) => createWorkProduct.mutateAsync(data)}
+        onUpdateWorkProduct={(id, data) => updateWorkProduct.mutateAsync({ id, data })}
+        saving={createWorkProduct.isPending || updateWorkProduct.isPending}
       />
 
       <PluginSlotOutlet
@@ -4024,6 +4130,47 @@ export function IssueDetail() {
           </TabsContent>
         )}
       </Tabs>
+
+      <Dialog open={closeWarningOpen} onOpenChange={setCloseWarningOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>{t("issueEvidence.closeWarning.title")}</DialogTitle>
+            <DialogDescription>
+              {t("issueEvidence.closeWarning.description")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-1">
+                <p>{t("issueEvidence.closeWarning.body")}</p>
+                <p className="text-xs">
+                  {t("issueEvidence.title")}: {issueEvidenceConfidenceLabel(issue.deliveryEvidence?.closeConfidence ?? "missing", t)}
+                </p>
+              </div>
+            </div>
+            <label className="space-y-1.5 text-sm">
+              <span className="text-xs font-medium text-muted-foreground">
+                {t("issueEvidence.closeWarning.reasonLabel")}
+              </span>
+              <Textarea
+                value={closeWarningReason}
+                onChange={(event) => setCloseWarningReason(event.target.value)}
+                placeholder={t("issueEvidence.closeWarning.reasonPlaceholder")}
+                className="min-h-[96px]"
+              />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCloseWarningOpen(false)} disabled={updateIssue.isPending}>
+              {t("issueEvidence.closeWarning.cancel")}
+            </Button>
+            <Button onClick={confirmCloseWithEvidenceOverride} disabled={updateIssue.isPending}>
+              {t("issueEvidence.closeWarning.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={treeControlOpen} onOpenChange={setTreeControlOpen}>
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
