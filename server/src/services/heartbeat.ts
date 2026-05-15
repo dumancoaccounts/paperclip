@@ -103,6 +103,7 @@ import {
   isVerifiedIssueTreeControlInteractionWake,
   issueTreeControlService,
 } from "./issue-tree-control.js";
+import { maintenanceGateService } from "./maintenance-gate.js";
 import {
   continuationSummaryParksExecutor,
   getIssueContinuationSummaryDocument,
@@ -2322,6 +2323,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   const companySkills = companySkillService(db);
   const issuesSvc = issueService(db);
   const treeControlSvc = issueTreeControlService(db);
+  const maintenanceGate = maintenanceGateService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const environmentsSvc = environmentService(db);
   const environmentRuntime = options.environmentRuntime ?? environmentRuntimeService(db, {
@@ -5794,6 +5796,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     const context = parseObject(run.contextSnapshot);
+    const maintenanceHold = await maintenanceGate.holdQueuedRun({
+      run,
+      reason: "heartbeat.claim_queued_run",
+    });
+    if (maintenanceHold.held) {
+      if (maintenanceHold.created) {
+        await appendRunEvent(run, await nextRunEventSeq(run.id), {
+          eventType: "lifecycle",
+          stream: "system",
+          level: "info",
+          message: "Queued run held by active maintenance gate",
+          payload: {
+            maintenanceWindowId: maintenanceHold.window.id,
+            maintenanceState: maintenanceHold.window.state,
+            maintenanceMemberId: maintenanceHold.member.id,
+          },
+        });
+      }
+      return null;
+    }
+
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
       issueId: readNonEmptyString(context.issueId),
       projectId: readNonEmptyString(context.projectId),
@@ -9414,6 +9437,97 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return cancelled;
   }
 
+  async function interruptRunForMaintenance(input: {
+    runId: string;
+    maintenanceWindowId: string;
+    reason?: string | null;
+    operatorNote?: string | null;
+  }) {
+    const run = await getRun(input.runId);
+    if (!run) throw notFound("Heartbeat run not found");
+    if (!CANCELLABLE_HEARTBEAT_RUN_STATUSES.includes(run.status as (typeof CANCELLABLE_HEARTBEAT_RUN_STATUSES)[number])) return run;
+    const agent = await getAgent(run.agentId);
+    const context = parseObject(run.contextSnapshot);
+    const issueId = readNonEmptyString(context.issueId);
+    const reason = input.reason ?? "Interrupted by maintenance gate";
+
+    const running = runningProcesses.get(run.id);
+    if (running) {
+      await terminateHeartbeatRunProcess({
+        pid: running.child.pid ?? run.processPid,
+        processGroupId: running.processGroupId ?? run.processGroupId,
+        graceMs: Math.max(1, running.graceSec) * 1000,
+      });
+    } else if (run.processPid || run.processGroupId) {
+      await terminateHeartbeatRunProcess({
+        pid: run.processPid,
+        processGroupId: run.processGroupId,
+      });
+    }
+
+    const interrupted = await setRunStatus(run.id, "cancelled", {
+      finishedAt: new Date(),
+      error: reason,
+      errorCode: "maintenance_interrupted",
+      contextSnapshot: {
+        ...context,
+        maintenanceInterrupted: {
+          maintenanceWindowId: input.maintenanceWindowId,
+          operatorNote: input.operatorNote ?? null,
+          interruptedAt: new Date().toISOString(),
+        },
+      },
+      ...(agent ? {
+        resultJson: mergeRunStopMetadataForAgent(agent, "cancelled", {
+          resultJson: parseObject(run.resultJson),
+          errorCode: "maintenance_interrupted",
+          errorMessage: reason,
+        }),
+      } : {}),
+    });
+
+    await setWakeupStatus(run.wakeupRequestId, "cancelled", {
+      finishedAt: new Date(),
+      error: reason,
+    });
+
+    if (interrupted) {
+      await maintenanceGate.recordHeldMember({
+        maintenanceWindowId: input.maintenanceWindowId,
+        companyId: interrupted.companyId,
+        agentId: interrupted.agentId,
+        issueId,
+        runId: interrupted.id,
+        wakeupRequestId: interrupted.wakeupRequestId,
+        kind: "running_run",
+        state: "interrupted",
+        dedupeKey: `running_run:${interrupted.id}`,
+        snapshotJson: {
+          reason,
+          contextSnapshot: context,
+          operatorNote: input.operatorNote ?? null,
+          interruptedAt: new Date().toISOString(),
+        },
+      });
+      await appendRunEvent(interrupted, await nextRunEventSeq(interrupted.id), {
+        eventType: "lifecycle",
+        stream: "system",
+        level: "warn",
+        message: "run interrupted by maintenance gate",
+        payload: {
+          maintenanceWindowId: input.maintenanceWindowId,
+          issueId,
+        },
+      });
+      await releaseIssueExecutionAndPromote(interrupted);
+    }
+
+    runningProcesses.delete(run.id);
+    await finalizeAgentStatus(run.agentId, "cancelled");
+    await startNextQueuedRunForAgent(run.agentId);
+    return interrupted;
+  }
+
   async function cancelActiveForAgentInternal(agentId: string, reason = "Cancelled due to agent pause") {
     const agent = await getAgent(agentId);
     const runs = await db
@@ -9771,6 +9885,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const elapsedMs = now.getTime() - baseline;
         if (elapsedMs < policy.intervalSec * 1000) continue;
 
+        const maintenanceHold = await maintenanceGate.holdSchedulerTick({
+          companyId: agent.companyId,
+          agentId: agent.id,
+          now,
+          source: "heartbeat_timer",
+          reason: "interval_elapsed",
+        });
+        if (maintenanceHold.held) {
+          skipped += 1;
+          continue;
+        }
+
         const run = await enqueueWakeup(agent.id, {
           source: "timer",
           triggerDetail: "system",
@@ -9797,6 +9923,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),
+
+    interruptRunForMaintenance,
+
+    startNextQueuedRunForAgent,
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 

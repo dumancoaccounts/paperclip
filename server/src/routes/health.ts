@@ -7,6 +7,7 @@ import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { maintenanceGateService } from "../services/maintenance-gate.js";
 import { serverVersion } from "../version.js";
 
 function shouldExposeFullHealthDetails(
@@ -119,6 +120,34 @@ export function healthRoutes(
       });
     }
 
+    let maintenance:
+      | {
+          active: boolean;
+          state: string | null;
+          maintenanceWindowId: string | null;
+          waitingForActiveRuns: number;
+          heldCount: number;
+          queuedCount: number;
+          ready: boolean;
+        }
+      | undefined;
+    if (exposeFullDetails && typeof (db as { select?: unknown }).select === "function") {
+      try {
+        const status = await maintenanceGateService(db).buildStatus();
+        maintenance = {
+          active: status.active,
+          state: status.window?.state ?? null,
+          maintenanceWindowId: status.window?.id ?? null,
+          waitingForActiveRuns: status.readiness.waitingForActiveRuns,
+          heldCount: status.readiness.heldCount,
+          queuedCount: status.readiness.queuedCount,
+          ready: status.readiness.ready,
+        };
+      } catch (error) {
+        logger.warn({ err: error }, "Health check maintenance projection failed");
+      }
+    }
+
     if (!exposeFullDetails) {
       res.json({
         status: "ok",
@@ -141,6 +170,7 @@ export function healthRoutes(
       features: {
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
+      ...(maintenance ? { maintenance } : {}),
       ...(devServer ? { devServer } : {}),
     });
   });

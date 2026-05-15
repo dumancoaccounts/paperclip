@@ -58,6 +58,7 @@ import { parseCron, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
+import { maintenanceGateService } from "./maintenance-gate.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
 const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"];
@@ -164,6 +165,7 @@ function nextResultText(status: string, issueId?: string | null) {
   if (status === "issue_created" && issueId) return `Created execution issue ${issueId}`;
   if (status === "coalesced") return "Coalesced into an existing live execution issue";
   if (status === "skipped") return "Skipped because a live execution issue already exists";
+  if (status === "maintenance_held") return "Held by active maintenance gate";
   if (status === "completed") return "Execution issue completed";
   if (status === "failed") return "Execution failed";
   return status;
@@ -1192,6 +1194,34 @@ export function routineService(
 
       let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
+        if (input.source === "schedule" || input.source === "api" || input.source === "webhook") {
+          const maintenanceHold = await maintenanceGateService(txDb).holdRoutineDispatch({
+            routine: input.routine,
+            trigger: input.trigger,
+            run: createdRun,
+            source: input.source,
+            projectId,
+            assigneeAgentId,
+            title,
+            description,
+            triggerPayload,
+            dispatchFingerprint,
+          });
+          if (maintenanceHold.held) {
+            const held = await finalizeRun(createdRun.id, {
+              status: "maintenance_held",
+            }, txDb);
+            await updateRoutineTouchedState({
+              routineId: input.routine.id,
+              triggerId: input.trigger?.id ?? null,
+              triggeredAt,
+              status: "maintenance_held",
+              nextRunAt,
+            }, txDb);
+            return held ?? createdRun;
+          }
+        }
+
         const activeIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
           kind: issueOriginKind,
           id: issueOriginId,

@@ -4,6 +4,7 @@ export type HeartbeatRunStopReason =
   | "completed"
   | "timeout"
   | "cancelled"
+  | "maintenance_interrupted"
   | "budget_paused"
   | "paused"
   | "max_turns_exhausted"
@@ -88,6 +89,7 @@ export function inferHeartbeatRunStopReason(input: {
   if (input.outcome === "timed_out") return "timeout";
   if (input.outcome === "failed" && input.errorCode === "process_lost") return "process_lost";
   if (input.outcome === "cancelled") {
+    if (input.errorCode === "maintenance_interrupted") return "maintenance_interrupted";
     const message = (input.errorMessage ?? "").toLowerCase();
     if (message.includes("budget")) return "budget_paused";
     if (message.includes("pause") || message.includes("paused")) return "paused";
