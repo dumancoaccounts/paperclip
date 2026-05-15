@@ -138,6 +138,11 @@ export type {
 export type {
   IssueWorkProduct,
   IssueWorkProductType,
+  IssueEvidenceKind,
+  IssueEvidenceVerificationRole,
+  IssueEvidenceValidity,
+  IssueDeliveryEvidenceCloseConfidence,
+  IssueDeliveryEvidenceSummary,
   IssueWorkProductProvider,
   IssueWorkProductStatus,
   IssueWorkProductReviewState,

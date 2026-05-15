@@ -5,7 +5,21 @@ export type IssueWorkProductType =
   | "branch"
   | "commit"
   | "artifact"
-  | "document";
+  | "document"
+  | "test_result"
+  | "screenshot"
+  | "report"
+  | "release_artifact"
+  | "manual_verification_note";
+
+export type IssueEvidenceKind =
+  | "test_result"
+  | "screenshot"
+  | "pull_request"
+  | "report"
+  | "release_artifact"
+  | "document"
+  | "manual_verification_note";
 
 export type IssueWorkProductProvider =
   | "paperclip"
@@ -31,6 +45,37 @@ export type IssueWorkProductReviewState =
   | "approved"
   | "changes_requested";
 
+export type IssueEvidenceVerificationRole =
+  | "minimum_verification"
+  | "expected_output"
+  | "completion_summary"
+  | "supporting";
+
+export type IssueEvidenceValidity =
+  | "current"
+  | "stale"
+  | "superseded"
+  | "revoked";
+
+export type IssueDeliveryEvidenceCloseConfidence =
+  | "missing"
+  | "weak"
+  | "partial"
+  | "ready"
+  | "review_required";
+
+export interface IssueDeliveryEvidenceSummary {
+  closeConfidence: IssueDeliveryEvidenceCloseConfidence;
+  primaryEvidenceId: string | null;
+  minimumVerificationEvidenceId: string | null;
+  expectedOutputEvidenceId: string | null;
+  currentEvidenceCount: number;
+  staleEvidenceCount: number;
+  supersededEvidenceCount: number;
+  missingReasons: string[];
+  lastVerifiedAt: Date | null;
+}
+
 export interface IssueWorkProduct {
   id: string;
   companyId: string;
@@ -49,6 +94,17 @@ export interface IssueWorkProduct {
   healthStatus: "unknown" | "healthy" | "unhealthy";
   summary: string | null;
   metadata: Record<string, unknown> | null;
+  evidenceKind: IssueEvidenceKind | null;
+  verificationRole: IssueEvidenceVerificationRole;
+  validity: IssueEvidenceValidity;
+  satisfiesMinimumVerification: boolean;
+  coversExpectedOutput: boolean;
+  verifiedAt: Date | null;
+  staleAt: Date | null;
+  staleReason: string | null;
+  supersededByWorkProductId: string | null;
+  supersededAt: Date | null;
+  supersededReason: string | null;
   createdByRunId: string | null;
   createdAt: Date;
   updatedAt: Date;

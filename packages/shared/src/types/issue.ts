@@ -32,7 +32,7 @@ import type {
 import type { Goal } from "./goal.js";
 import type { Project, ProjectWorkspace } from "./project.js";
 import type { ExecutionWorkspace, IssueExecutionWorkspaceSettings } from "./workspace-runtime.js";
-import type { IssueWorkProduct } from "./work-product.js";
+import type { IssueDeliveryEvidenceSummary, IssueWorkProduct } from "./work-product.js";
 
 export type { IssueWorkMode };
 
@@ -525,6 +525,7 @@ export interface Issue {
   goal?: Goal | null;
   currentExecutionWorkspace?: ExecutionWorkspace | null;
   workProducts?: IssueWorkProduct[];
+  deliveryEvidence?: IssueDeliveryEvidenceSummary;
   mentionedProjects?: Project[];
   myLastTouchAt?: Date | null;
   lastExternalCommentAt?: Date | null;

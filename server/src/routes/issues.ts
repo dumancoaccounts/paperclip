@@ -75,6 +75,7 @@ import {
   logActivity,
   projectService,
   routineService,
+  summarizeIssueDeliveryEvidence,
   workProductService,
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
@@ -1688,6 +1689,7 @@ export function issueRoutes(
       continuationSummary,
       currentExecutionWorkspace,
       activeRecoveryAction,
+      workProducts,
     ] =
       await Promise.all([
         resolveIssueProjectAndGoal(issue),
@@ -1702,6 +1704,7 @@ export function issueRoutes(
         documentsSvc.getIssueDocumentByKey(issue.id, ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY),
         currentExecutionWorkspacePromise,
         recoveryActionsSvc.getActiveForIssue(issue.companyId, issue.id),
+        workProductsSvc.listForIssue(issue.id),
       ]);
     const recoveryActionsByRelationIssue = await relationRecoveryActionMap(
       recoveryActionsSvc,
@@ -1712,6 +1715,7 @@ export function issueRoutes(
       relations,
       recoveryActionsByRelationIssue,
     );
+    const deliveryEvidence = summarizeIssueDeliveryEvidence(issue, workProducts);
 
     res.json({
       issue: {
@@ -1726,6 +1730,7 @@ export function issueRoutes(
         estimate: issue.estimate,
         phase: issue.phase,
         progress: deriveIssueProgressSummary(issue),
+        deliveryEvidence,
         status: issue.status,
         workMode: issue.workMode,
         ...(blockerAttention ? { blockerAttention } : {}),
@@ -1792,6 +1797,7 @@ export function issueRoutes(
           }
         : null,
       currentExecutionWorkspace,
+      deliveryEvidence,
     });
   });
 
@@ -1844,9 +1850,11 @@ export function issueRoutes(
       ? await executionWorkspacesSvc.getById(issue.executionWorkspaceId)
       : null;
     const workProducts = await workProductsSvc.listForIssue(issue.id);
+    const deliveryEvidence = summarizeIssueDeliveryEvidence(issue, workProducts);
     res.json({
       ...issue,
       progress: deriveIssueProgressSummary(issue),
+      deliveryEvidence,
       goalId: goal?.id ?? issue.goalId,
       ancestors,
       ...(blockerAttention ? { blockerAttention } : {}),
@@ -3264,11 +3272,13 @@ export function issueRoutes(
       blockedBy?: unknown;
       blocks?: unknown;
       progress: IssueProgressSummary;
+      deliveryEvidence: ReturnType<typeof summarizeIssueDeliveryEvidence>;
       relatedWork?: Awaited<ReturnType<typeof issueReferencesSvc.listIssueReferenceSummary>>;
       referencedIssueIdentifiers?: string[];
     } = {
       ...issue,
       progress: deriveIssueProgressSummary(issue),
+      deliveryEvidence: summarizeIssueDeliveryEvidence(issue, await workProductsSvc.listForIssue(issue.id)),
     };
     let updatedRelations: Awaited<ReturnType<typeof svc.getRelationSummaries>> | null = null;
     if (issue && Array.isArray(req.body.blockedByIssueIds)) {
@@ -3276,6 +3286,7 @@ export function issueRoutes(
       issueResponse = {
         ...issue,
         progress: deriveIssueProgressSummary(issue),
+        deliveryEvidence: issueResponse.deliveryEvidence,
         blockedBy: updatedRelations.blockedBy,
         blocks: updatedRelations.blocks,
       };

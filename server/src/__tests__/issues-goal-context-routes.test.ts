@@ -120,6 +120,22 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
   projectService: () => mockProjectService,
   routineService: () => mockRoutineService,
+  summarizeIssueDeliveryEvidence: (issue: any, workProducts: any[]) => {
+    const current = workProducts.filter((product) => product.validity === "current");
+    const minimumVerificationEvidence = current.find((product) => product.satisfiesMinimumVerification) ?? null;
+    const expectedOutputEvidence = current.find((product) => product.coversExpectedOutput) ?? null;
+    return {
+      closeConfidence: minimumVerificationEvidence && expectedOutputEvidence ? "ready" : current.length > 0 ? "weak" : "missing",
+      primaryEvidenceId: current.find((product) => product.isPrimary)?.id ?? null,
+      minimumVerificationEvidenceId: minimumVerificationEvidence?.id ?? null,
+      expectedOutputEvidenceId: expectedOutputEvidence?.id ?? null,
+      currentEvidenceCount: current.length,
+      staleEvidenceCount: workProducts.filter((product) => product.validity === "stale").length,
+      supersededEvidenceCount: workProducts.filter((product) => product.validity === "superseded").length,
+      missingReasons: current.length > 0 ? [] : ["current_evidence_missing"],
+      lastVerifiedAt: current.find((product) => product.verifiedAt)?.verifiedAt ?? null,
+    };
+  },
   workProductService: () => mockWorkProductService,
 }));
 
@@ -184,6 +200,43 @@ const projectGoal = {
   updatedAt: new Date("2026-03-20T00:00:00Z"),
 };
 
+function createWorkProduct(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "work-product-1",
+    companyId: "company-1",
+    projectId: legacyProjectLinkedIssue.projectId,
+    issueId: legacyProjectLinkedIssue.id,
+    executionWorkspaceId: null,
+    runtimeServiceId: null,
+    type: "test_result",
+    provider: "paperclip",
+    externalId: null,
+    title: "Targeted tests",
+    url: null,
+    status: "active",
+    reviewState: "none",
+    isPrimary: true,
+    healthStatus: "healthy",
+    summary: null,
+    metadata: null,
+    evidenceKind: "test_result",
+    verificationRole: "minimum_verification",
+    validity: "current",
+    satisfiesMinimumVerification: true,
+    coversExpectedOutput: true,
+    verifiedAt: new Date("2026-03-24T12:15:00Z"),
+    staleAt: null,
+    staleReason: null,
+    supersededByWorkProductId: null,
+    supersededAt: null,
+    supersededReason: null,
+    createdByRunId: null,
+    createdAt: new Date("2026-03-24T12:00:00Z"),
+    updatedAt: new Date("2026-03-24T12:15:00Z"),
+    ...overrides,
+  };
+}
+
 describe.sequential("issue goal context routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -201,6 +254,7 @@ describe.sequential("issue goal context routes", () => {
     mockIssueService.listProductivityReviews.mockResolvedValue(new Map());
     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
     mockIssueService.listAttachments.mockResolvedValue([]);
+    mockWorkProductService.listForIssue.mockResolvedValue([]);
     mockDocumentsService.getIssueDocumentPayload.mockResolvedValue({});
     mockDocumentsService.getIssueDocumentByKey.mockResolvedValue(null);
     mockExecutionWorkspaceService.getById.mockResolvedValue(null);
@@ -329,6 +383,37 @@ describe.sequential("issue goal context routes", () => {
       phase: "verification",
       progress: expect.objectContaining({ state: "verifying" }),
     }));
+  });
+
+  it("surfaces delivery evidence summary in get and heartbeat context responses", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      ...legacyProjectLinkedIssue,
+      minimumVerification: ["Run focused API tests"],
+      expectedOutput: "Implementation PR",
+    });
+    mockWorkProductService.listForIssue.mockResolvedValue([createWorkProduct()]);
+
+    const getRes = await request(createApp()).get("/api/issues/11111111-1111-4111-8111-111111111111");
+
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.deliveryEvidence).toEqual(expect.objectContaining({
+      closeConfidence: "ready",
+      primaryEvidenceId: "work-product-1",
+      minimumVerificationEvidenceId: "work-product-1",
+      expectedOutputEvidenceId: "work-product-1",
+      currentEvidenceCount: 1,
+    }));
+
+    const heartbeatRes = await request(createApp()).get(
+      "/api/issues/11111111-1111-4111-8111-111111111111/heartbeat-context",
+    );
+
+    expect(heartbeatRes.status).toBe(200);
+    expect(heartbeatRes.body.issue.deliveryEvidence).toEqual(expect.objectContaining({
+      closeConfidence: "ready",
+      currentEvidenceCount: 1,
+    }));
+    expect(heartbeatRes.body.deliveryEvidence).toEqual(heartbeatRes.body.issue.deliveryEvidence);
   });
 
   it("preserves direct continuation summary lookup in GET /issues/:id/heartbeat-context", async () => {

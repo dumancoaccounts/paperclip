@@ -610,6 +610,13 @@
       "when": 1778845200000,
       "tag": "0086_issue_contract_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1778859142957,
+      "tag": "0087_superb_lifeguard",
+      "breakpoints": true
     }
   ]
 }

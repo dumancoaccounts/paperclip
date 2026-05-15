@@ -399,6 +399,7 @@ Operational policy:
 The current implementation includes additional V1-control-plane tables beyond the original February snapshot:
 
 - Issue structure and review: `issue_relations` for blockers, `labels`/`issue_labels`, `issue_thread_interactions`, `issue_approvals`, `issue_execution_decisions`, `issue_work_products`, `issue_inbox_archives`, `issue_read_states`, and issue reference mention indexes.
+  - `issue_work_products` also carries delivery evidence fields (`evidence_kind`, `verification_role`, `validity`, minimum-verification/expected-output booleans, verification timestamps, and stale/superseded metadata). Legacy rows remain `supporting`/`current` by default.
 - Execution and workspace control: `execution_workspaces`, `project_workspaces`, `workspace_runtime_services`, `workspace_operations`, `environments`, `environment_leases`, `agent_task_sessions`, `agent_runtime_state`, `agent_wakeup_requests`, heartbeat events, and watchdog decision tables.
 - Plugins and routines: `plugins`, plugin config/state/entities/jobs/logs/webhooks, plugin database namespaces/migrations, plugin company settings, and `routines`.
 - Access and operations: company memberships, instance roles, principal permission grants, invites, join requests, board API keys, CLI auth challenges, budget policies/incidents, feedback exports/votes, company skills, sidebar preferences, and company logos.
@@ -612,6 +613,7 @@ The current app also exposes V1-supporting surfaces for:
 
 - issue thread interactions (`suggest_tasks`, `ask_user_questions`, `request_confirmation`)
 - issue approvals, issue references/search, labels, read state, inbox/archive state, and work products
+- delivery evidence summaries on issue detail and heartbeat-context responses so agents and board surfaces can reason about close confidence without parsing comments
 - execution workspaces, project workspaces, workspace runtime services, and workspace operations
 - routines and scheduled/API/webhook triggers
 - plugin installation, configuration, state, jobs, logs, webhooks, and plugin database namespace migration

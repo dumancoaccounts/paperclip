@@ -1,8 +1,11 @@
+import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   index,
   jsonb,
   pgTable,
+  uniqueIndex,
   text,
   timestamp,
   uuid,
@@ -36,6 +39,18 @@ export const issueWorkProducts = pgTable(
     healthStatus: text("health_status").notNull().default("unknown"),
     summary: text("summary"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    evidenceKind: text("evidence_kind"),
+    verificationRole: text("verification_role").notNull().default("supporting"),
+    validity: text("validity").notNull().default("current"),
+    satisfiesMinimumVerification: boolean("satisfies_minimum_verification").notNull().default(false),
+    coversExpectedOutput: boolean("covers_expected_output").notNull().default(false),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    staleAt: timestamp("stale_at", { withTimezone: true }),
+    staleReason: text("stale_reason"),
+    supersededByWorkProductId: uuid("superseded_by_work_product_id")
+      .references((): AnyPgColumn => issueWorkProducts.id, { onDelete: "set null" }),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
+    supersededReason: text("superseded_reason"),
     createdByRunId: uuid("created_by_run_id").references(() => heartbeatRuns.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -60,5 +75,18 @@ export const issueWorkProducts = pgTable(
       table.companyId,
       table.updatedAt,
     ),
+    companyIssueEvidenceKindIdx: index("issue_work_products_company_issue_evidence_kind_idx").on(
+      table.companyId,
+      table.issueId,
+      table.evidenceKind,
+    ),
+    companyIssueValidityIdx: index("issue_work_products_company_issue_validity_idx").on(
+      table.companyId,
+      table.issueId,
+      table.validity,
+    ),
+    primaryCurrentRoleIdx: uniqueIndex("issue_work_products_primary_current_role_uq")
+      .on(table.companyId, table.issueId, table.verificationRole)
+      .where(sql`${table.isPrimary} = true and ${table.validity} = 'current'`),
   }),
 );
