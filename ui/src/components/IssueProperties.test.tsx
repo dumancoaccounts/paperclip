@@ -419,6 +419,49 @@ describe("IssueProperties", () => {
     act(() => root.unmount());
   });
 
+  it("edits phase and compact estimate fields from the properties rail", async () => {
+    const onUpdate = vi.fn();
+    const root = renderProperties(container, {
+      issue: createIssue({
+        phase: "planning",
+        estimate: { size: "S", risk: "low" },
+      }),
+      childIssues: [],
+      onUpdate,
+    });
+    await flush();
+
+    expect(container.textContent).toContain("Phase");
+    expect(container.textContent).toContain("Estimate");
+    expect(container.textContent).toContain("Planning");
+
+    const phaseSelect = container.querySelector('select[aria-label="Phase"]') as HTMLSelectElement | null;
+    expect(phaseSelect).not.toBeNull();
+    await act(async () => {
+      phaseSelect!.value = "verification";
+      phaseSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onUpdate).toHaveBeenCalledWith({ phase: "verification" });
+
+    const sizeSelect = container.querySelector('select[aria-label="Size"]') as HTMLSelectElement | null;
+    expect(sizeSelect).not.toBeNull();
+    await act(async () => {
+      sizeSelect!.value = "M";
+      sizeSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onUpdate).toHaveBeenCalledWith({ estimate: { size: "M", risk: "low" } });
+
+    const riskSelect = container.querySelector('select[aria-label="Risk"]') as HTMLSelectElement | null;
+    expect(riskSelect).not.toBeNull();
+    await act(async () => {
+      riskSelect!.value = "";
+      riskSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onUpdate).toHaveBeenCalledWith({ estimate: { size: "S", risk: null } });
+
+    act(() => root.unmount());
+  });
+
   it("renders blocked-by issues as direct chips and edits them from an add action", async () => {
     const onUpdate = vi.fn();
     mockIssuesApi.list.mockResolvedValue([

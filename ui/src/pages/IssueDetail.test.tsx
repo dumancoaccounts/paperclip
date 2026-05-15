@@ -858,6 +858,48 @@ describe("IssueDetail", () => {
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
+  it("renders the structured issue contract after the description", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({
+      description: "Legacy context stays separate.",
+      expectedOutput: "GitHub-ready PR",
+      successCriteria: ["Contract renders"],
+      minimumVerification: ["Run focused UI tests"],
+      outOfScope: ["Backend schema"],
+      phase: "verification",
+      estimate: {
+        size: "M",
+        expectedHeartbeatCount: 2,
+        risk: "medium",
+      },
+      progress: {
+        phase: "verification",
+        state: "verifying",
+        percent: null,
+        reason: "Issue phase is verification.",
+        source: "phase",
+      },
+    }));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Legacy context stays separate.");
+    expect(container.textContent).toContain("Contract");
+    expect(container.textContent).toContain("GitHub-ready PR");
+    expect(container.textContent).toContain("Contract renders");
+    expect(container.textContent).toContain("Run focused UI tests");
+    expect(container.textContent).toContain("Backend schema");
+    expect(container.textContent).toContain("Verification");
+    expect(container.textContent).toContain("Medium risk");
+  });
+
   it("renders sibling previous and next navigation at the chat footer", async () => {
     const issue = createIssue({
       id: "issue-2",

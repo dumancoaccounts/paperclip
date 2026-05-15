@@ -241,6 +241,31 @@ async function typeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   await flush();
 }
 
+async function typeInputValue(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    valueSetter?.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+}
+
+async function selectValue(select: HTMLSelectElement, value: string) {
+  await act(async () => {
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLSelectElement.prototype,
+      "value",
+    )?.set;
+    valueSetter?.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+}
+
 async function waitForAssertion(assertion: () => void, attempts = 20) {
   let lastError: unknown;
 
@@ -584,6 +609,128 @@ describe("NewIssueDialog", () => {
         workMode: "standard",
       }),
     );
+    const payload = mockIssuesApi.create.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("successCriteria");
+    expect(payload).not.toHaveProperty("minimumVerification");
+    expect(payload).not.toHaveProperty("expectedOutput");
+    expect(payload).not.toHaveProperty("outOfScope");
+    expect(payload).not.toHaveProperty("estimate");
+    expect(payload).not.toHaveProperty("phase");
+
+    act(() => root.unmount());
+  });
+
+  it("submits optional issue contract, estimate, and phase fields when expanded", async () => {
+    const { root } = renderDialog(container);
+    await flush();
+
+    const titleInput = container.querySelector('textarea[placeholder="Issue title"]') as HTMLTextAreaElement | null;
+    expect(titleInput).not.toBeNull();
+    await typeTextareaValue(titleInput!, "Contract issue");
+
+    const contractToggle = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Contract"));
+    expect(contractToggle).not.toBeUndefined();
+    await act(async () => {
+      contractToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const expectedOutput = container.querySelector("#issue-contract-expected-output") as HTMLTextAreaElement | null;
+    expect(expectedOutput).not.toBeNull();
+    await typeTextareaValue(expectedOutput!, "A merged PR");
+
+    const addButtons = Array.from(container.querySelectorAll("button"))
+      .filter((button) => button.textContent?.includes("Add item"));
+    expect(addButtons).toHaveLength(3);
+    for (const button of addButtons) {
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    }
+    await flush();
+
+    const successInput = container.querySelector('input[placeholder="Measurable condition for marking this issue done"]') as HTMLInputElement | null;
+    const verificationInput = container.querySelector('input[placeholder="Smallest check that proves the work"]') as HTMLInputElement | null;
+    const outOfScopeInput = container.querySelector('input[placeholder="Work this issue should not include"]') as HTMLInputElement | null;
+    expect(successInput).not.toBeNull();
+    expect(verificationInput).not.toBeNull();
+    expect(outOfScopeInput).not.toBeNull();
+
+    await typeInputValue(successInput!, "Contract renders on detail");
+    await typeInputValue(verificationInput!, "Run focused UI tests");
+    await typeInputValue(outOfScopeInput!, "Backend schema changes");
+
+    const contractSelects = Array.from(container.querySelectorAll("select")) as HTMLSelectElement[];
+    expect(contractSelects.length).toBeGreaterThanOrEqual(3);
+    await selectValue(contractSelects[0]!, "implementation");
+    await selectValue(contractSelects[1]!, "M");
+    await selectValue(contractSelects[2]!, "medium");
+
+    const numericInputs = Array.from(container.querySelectorAll('input[inputmode="numeric"]')) as HTMLInputElement[];
+    await typeInputValue(numericInputs[0]!, "2");
+    await typeInputValue(numericInputs[1]!, "1");
+    await typeInputValue(numericInputs[2]!, "3");
+    await typeInputValue(numericInputs[3]!, "2");
+
+    const submitButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Create Issue"));
+    expect(submitButton).not.toBeUndefined();
+    await act(async () => {
+      submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(mockIssuesApi.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        title: "Contract issue",
+        expectedOutput: "A merged PR",
+        successCriteria: ["Contract renders on detail"],
+        minimumVerification: ["Run focused UI tests"],
+        outOfScope: ["Backend schema changes"],
+        phase: "implementation",
+        estimate: expect.objectContaining({
+          size: "M",
+          risk: "medium",
+          expectedHeartbeatCount: 2,
+          expectedHeartbeatRange: { min: 1, max: 3 },
+          effectiveParallelism: 2,
+        }),
+      }),
+    );
+
+    act(() => root.unmount());
+  });
+
+  it("keeps contract validation field-level and does not submit invalid estimates", async () => {
+    const { root } = renderDialog(container);
+    await flush();
+
+    const titleInput = container.querySelector('textarea[placeholder="Issue title"]') as HTMLTextAreaElement | null;
+    expect(titleInput).not.toBeNull();
+    await typeTextareaValue(titleInput!, "Invalid estimate");
+
+    const contractToggle = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Contract"));
+    await act(async () => {
+      contractToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const numericInputs = Array.from(container.querySelectorAll('input[inputmode="numeric"]')) as HTMLInputElement[];
+    await typeInputValue(numericInputs[1]!, "5");
+    await typeInputValue(numericInputs[2]!, "2");
+
+    const submitButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Create Issue"));
+    await act(async () => {
+      submitButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(mockIssuesApi.create).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Range minimum must be less than or equal to maximum.");
 
     act(() => root.unmount());
   });

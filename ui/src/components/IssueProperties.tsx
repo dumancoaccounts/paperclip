@@ -52,6 +52,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { User, Hexagon, ArrowUpRight, Tag, Plus, GitBranch, FolderOpen, Check, ExternalLink, X, Clock, RotateCcw, Loader2, CheckCircle2 } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+import { useLocale } from "../lib/i18n";
+import {
+  ISSUE_ESTIMATE_RISK_OPTIONS,
+  ISSUE_ESTIMATE_SIZE_OPTIONS,
+  ISSUE_PHASE_OPTIONS,
+  issueEstimateRiskLabel,
+  issueEstimateSizeLabel,
+  issueEstimateSummary,
+  issuePhaseLabel,
+} from "../lib/issue-contract";
 
 function TruncatedCopyable({ value, icon: Icon }: { value: string; icon: React.ComponentType<{ className?: string }> }) {
   const [copied, setCopied] = useState(false);
@@ -381,6 +391,7 @@ export function IssueProperties({
   inline,
 }: IssuePropertiesProps) {
   const { selectedCompanyId } = useCompany();
+  const { t, locale } = useLocale();
   const queryClient = useQueryClient();
   const companyId = issue.companyId ?? selectedCompanyId;
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -551,6 +562,19 @@ export function IssueProperties({
   const assignee = issue.assigneeAgentId
     ? agents?.find((a) => a.id === issue.assigneeAgentId)
     : null;
+  const updateEstimate = (patch: Partial<NonNullable<Issue["estimate"]>>) => {
+    const base = issue.estimate ?? { size: null };
+    const next = { ...base, ...patch };
+    const hasEstimate = Boolean(
+      next.size
+      || next.expectedHeartbeatCount
+      || next.expectedHeartbeatRange
+      || next.risk
+      || next.effectiveParallelism
+      || next.notes,
+    );
+    onUpdate({ estimate: hasEstimate ? next : null });
+  };
   const assigneeAdapterType = assignee?.adapterType ?? null;
   const assigneeAdapterOverrides = issue.assigneeAdapterOverrides ?? null;
   const showAssigneeAdapterOptions = assigneeAdapterOverrides !== null;
@@ -1744,6 +1768,48 @@ export function IssueProperties({
             onChange={(priority) => onUpdate({ priority })}
             showLabel
           />
+        </PropertyRow>
+
+        <PropertyRow label={t("issueContract.phase")}>
+          <select
+            className="min-w-0 rounded-md border border-border bg-transparent px-2 py-1 text-sm outline-none"
+            value={issue.phase ?? ""}
+            aria-label={t("issueContract.phase")}
+            onChange={(event) => onUpdate({ phase: event.target.value || null })}
+          >
+            <option value="">{t("issueContract.noPhase")}</option>
+            {ISSUE_PHASE_OPTIONS.map((phase) => (
+              <option key={phase} value={phase}>{issuePhaseLabel(phase, locale)}</option>
+            ))}
+          </select>
+        </PropertyRow>
+
+        <PropertyRow label={t("issueContract.estimate")}>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <select
+              className="rounded-md border border-border bg-transparent px-2 py-1 text-sm outline-none"
+              value={issue.estimate?.size ?? ""}
+              aria-label={t("issueContract.estimateSize")}
+              title={issueEstimateSummary(issue.estimate, locale)}
+              onChange={(event) => updateEstimate({ size: event.target.value ? event.target.value as NonNullable<Issue["estimate"]>["size"] : null })}
+            >
+              <option value="">{t("issueContract.noSize")}</option>
+              {ISSUE_ESTIMATE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>{issueEstimateSizeLabel(size, locale)}</option>
+              ))}
+            </select>
+            <select
+              className="rounded-md border border-border bg-transparent px-2 py-1 text-sm outline-none"
+              value={issue.estimate?.risk ?? ""}
+              aria-label={t("issueContract.estimateRisk")}
+              onChange={(event) => updateEstimate({ risk: event.target.value ? event.target.value as NonNullable<Issue["estimate"]>["risk"] : null })}
+            >
+              <option value="">{t("issueContract.noRisk")}</option>
+              {ISSUE_ESTIMATE_RISK_OPTIONS.map((risk) => (
+                <option key={risk} value={risk}>{issueEstimateRiskLabel(risk, locale)}</option>
+              ))}
+            </select>
+          </div>
         </PropertyRow>
 
         <PropertyPicker

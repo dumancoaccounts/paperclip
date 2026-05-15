@@ -67,6 +67,14 @@ import { issueStatusText, issueStatusTextDefault, priorityColor, priorityColorDe
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
 import { AgentIcon } from "./AgentIconPicker";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+import { IssueContractForm } from "./IssueContractForm";
+import { useLocale } from "../lib/i18n";
+import {
+  buildIssueContractPayload,
+  issueContractFormStateFromIssue,
+  type IssueContractFormState,
+  type IssueContractValidationErrors,
+} from "../lib/issue-contract";
 
 const DRAFT_KEY = "paperclip:issue-draft";
 const DEBOUNCE_MS = 800;
@@ -75,6 +83,7 @@ const DEBOUNCE_MS = 800;
 interface IssueDraft {
   title: string;
   description: string;
+  contract?: IssueContractFormState;
   status: string;
   priority: string;
   assigneeValue: string;
@@ -403,10 +412,14 @@ function issueExecutionWorkspaceModeForExistingWorkspace(mode: string | null | u
 export function NewIssueDialog() {
   const { newIssueOpen, newIssueDefaults, closeNewIssue } = useDialog();
   const { companies, selectedCompanyId, selectedCompany } = useCompany();
+  const { t, locale } = useLocale();
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [contractOpen, setContractOpen] = useState(false);
+  const [contract, setContract] = useState<IssueContractFormState>(() => issueContractFormStateFromIssue(null));
+  const [contractErrors, setContractErrors] = useState<IssueContractValidationErrors>({});
   const titleRef = useRef("");
   const descriptionRef = useRef("");
   const [titleHasText, setTitleHasText] = useState(false);
@@ -643,6 +656,7 @@ export function NewIssueDialog() {
     scheduleSave({
       title: nextTitle,
       description: nextDescription,
+      contract,
       status,
       priority,
       assigneeValue,
@@ -661,6 +675,7 @@ export function NewIssueDialog() {
   }, [
     newIssueOpen,
     scheduleSave,
+    contract,
     status,
     priority,
     assigneeValue,
@@ -711,6 +726,7 @@ export function NewIssueDialog() {
     executionWorkspaceMode,
     selectedExecutionWorkspaceId,
     workMode,
+    contract,
     newIssueOpen,
     queueDraftSave,
   ]);
@@ -752,6 +768,9 @@ export function NewIssueDialog() {
       executionWorkspaceDefaultProjectId.current = hasExplicitProjectWorkspaceId || defaultProject
         ? defaultProjectId || null
         : null;
+      setContract(issueContractFormStateFromIssue(newIssueDefaults));
+      setContractOpen(false);
+      setContractErrors({});
     } else if (newIssueDefaults.title) {
       const nextWorkMode = isIssueWorkMode(newIssueDefaults.workMode) ? newIssueDefaults.workMode : "standard";
       setIssueText(newIssueDefaults.title, newIssueDefaults.description ?? "");
@@ -776,6 +795,9 @@ export function NewIssueDialog() {
       executionWorkspaceDefaultProjectId.current = hasExplicitProjectWorkspaceId || newIssueDefaults.executionWorkspaceId || defaultProject
         ? defaultProjectId || null
         : null;
+      setContract(issueContractFormStateFromIssue(newIssueDefaults));
+      setContractOpen(false);
+      setContractErrors({});
     } else if (draft && draft.title.trim()) {
       const nextWorkMode = isIssueWorkMode(draft.workMode) ? draft.workMode : "standard";
       const restoredProjectId = newIssueDefaults.projectId ?? draft.projectId;
@@ -822,6 +844,9 @@ export function NewIssueDialog() {
       executionWorkspaceDefaultProjectId.current = hasExplicitProjectWorkspaceId || hasExplicitExecutionWorkspaceId || draft.projectWorkspaceId || restoredProject
         ? restoredProjectId || null
         : null;
+      setContract(draft.contract ?? issueContractFormStateFromIssue(newIssueDefaults));
+      setContractOpen(false);
+      setContractErrors({});
     } else {
       setWorkMode("standard");
       const defaultProjectId = newIssueDefaults.projectId ?? "";
@@ -845,6 +870,9 @@ export function NewIssueDialog() {
       executionWorkspaceDefaultProjectId.current = hasExplicitProjectWorkspaceId || newIssueDefaults.executionWorkspaceId || defaultProject
         ? defaultProjectId || null
         : null;
+      setContract(issueContractFormStateFromIssue(newIssueDefaults));
+      setContractOpen(false);
+      setContractErrors({});
     }
   }, [newIssueOpen, newIssueDefaults, orderedProjects, selectedCompanyId, setIssueText]);
 
@@ -887,6 +915,9 @@ export function NewIssueDialog() {
 
   function reset() {
     setIssueText("", "");
+    setContract(issueContractFormStateFromIssue(null));
+    setContractOpen(false);
+    setContractErrors({});
     setStatus("todo");
     setPriority("");
     setAssigneeValue("");
@@ -943,6 +974,12 @@ export function NewIssueDialog() {
     const currentTitle = titleRef.current.trim();
     const currentDescription = descriptionRef.current.trim();
     if (!effectiveCompanyId || !currentTitle || createIssue.isPending) return;
+    const contractResult = buildIssueContractPayload(contract, { locale });
+    setContractErrors(contractResult.errors);
+    if (Object.keys(contractResult.errors).length > 0) {
+      setContractOpen(true);
+      return;
+    }
     const effectiveLane = assigneeSupportsCheapLane
       ? assigneeModelLane
       : assigneeModelLane === "cheap"
@@ -979,6 +1016,7 @@ export function NewIssueDialog() {
       stagedFiles,
       title: currentTitle,
       description: currentDescription || undefined,
+      ...contractResult.payload,
       status,
       priority: priority || "medium",
       workMode,
@@ -1736,6 +1774,41 @@ export function NewIssueDialog() {
             )}
             </div>
           )}
+
+          <div className="border-t border-border/60 px-4 py-3">
+            <button
+              type="button"
+              className="flex w-full items-start justify-between gap-3 rounded-md text-left transition-colors hover:bg-accent/20"
+              onClick={() => setContractOpen((open) => !open)}
+              aria-expanded={contractOpen}
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{t("issueContract.title")}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {t("issueContract.collapsedSummary")}
+                </span>
+              </span>
+              {contractOpen ? (
+                <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+            </button>
+            {contractOpen ? (
+              <div className="mt-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                <IssueContractForm
+                  value={contract}
+                  onChange={(next) => {
+                    setContract(next);
+                    setContractErrors({});
+                  }}
+                  errors={contractErrors}
+                  disabled={createIssue.isPending}
+                  compact
+                />
+              </div>
+            ) : null}
+          </div>
 
           {/* Description */}
           <div
